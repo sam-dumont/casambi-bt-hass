@@ -1,0 +1,8 @@
+# Requirements for Casambi BT testing scripts
+
+# Bluetooth Low Energy library
+bleak>=0.21.0
+
+# The casambi-bt library should be installed with:
+# pip install -e /path/to/your/casambi-bt
+# (DO NOT install from PyPI - that has the old version)
