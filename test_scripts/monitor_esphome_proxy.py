@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Monitor Casambi BT connection via ESPHome Bluetooth Proxy.
-This mimics Home Assistant's connection behavior.
+Monitor Casambi BT connection and verify ESPHome Bluetooth Proxy can see the device.
+
+This script:
+1. Verifies ESPHome proxy can see the device (validates proxy is working)
+2. Uses direct Bleak connection for monitoring (same as HA integration does)
+3. Helps debug connection stability issues
 """
 
 import asyncio
@@ -20,11 +24,15 @@ except ImportError:
 
 try:
     from aioesphomeapi import APIClient, BluetoothProxyFeature
-    from bleak_esphome.backend.client import ESPHomeClient
-    from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 except ImportError:
-    print("ERROR: Required libraries not installed.")
-    print("Install with: pip install aioesphomeapi bleak-esphome")
+    print("ERROR: aioesphomeapi not installed.")
+    print("Install with: pip install aioesphomeapi")
+    sys.exit(1)
+
+try:
+    from bleak import BleakScanner
+except ImportError:
+    print("ERROR: bleak not installed. Install with: pip install bleak")
     sys.exit(1)
 
 try:
@@ -75,6 +83,8 @@ class ESPHomeProxyMonitor:
         self.start_time = None
         self.last_disconnect_time = None
 
+        self.esphome_can_see_device = False
+
     def _disconnect_callback(self):
         """Called when the device disconnects."""
         self.disconnect_count += 1
@@ -113,6 +123,7 @@ class ESPHomeProxyMonitor:
                 else:
                     logger.warning("  ⚠️  Pairing support: DISABLED")
                     logger.warning("     This may cause 'Insufficient authorization' errors!")
+                    logger.warning("     Update ESPHome config with: cache_services: no")
 
             return True
 
@@ -120,44 +131,49 @@ class ESPHomeProxyMonitor:
             logger.error(f"❌ Failed to connect to ESPHome API: {e}")
             return False
 
-    async def scan_via_proxy(self):
-        """Scan for the Casambi device via ESPHome proxy."""
-        logger.info(f"Scanning for device {self.mac_address} via ESPHome proxy...")
+    async def check_esphome_visibility(self):
+        """Check if ESPHome proxy can see the Casambi device."""
+        logger.info(f"Checking if ESPHome proxy can see device {self.mac_address}...")
 
         try:
-            # Subscribe to Bluetooth advertisements
-            scan_results = {}
+            # Track if we've seen the device
+            found = asyncio.Event()
 
             def on_bluetooth_le_advertisement(adv):
                 """Handle Bluetooth advertisement."""
+                # Convert address from bytes to MAC address string
                 address = ":".join(f"{b:02X}" for b in adv.address)
                 if address.upper() == self.mac_address.upper():
-                    scan_results[address] = adv
-                    logger.info(f"Found device: {adv.name} ({address}), RSSI: {adv.rssi}")
+                    self.esphome_can_see_device = True
+                    logger.info(f"✓ ESPHome proxy sees device: {adv.name} ({address}), RSSI: {adv.rssi}")
+                    found.set()
 
-            # Subscribe to advertisements
-            unsub = await self.api_client.subscribe_bluetooth_le_advertisements(
+            # Subscribe to advertisements (returns unsubscribe function, not a coroutine)
+            unsub = self.api_client.subscribe_bluetooth_le_advertisements(
                 on_bluetooth_le_advertisement
             )
 
-            # Scan for 10 seconds
-            await asyncio.sleep(10)
-            unsub()
+            # Wait up to 15 seconds for device
+            try:
+                await asyncio.wait_for(found.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️  Device {self.mac_address} not seen via ESPHome proxy after 15s")
+                logger.warning("   This could mean:")
+                logger.warning("   - Device is out of range of ESPHome proxy")
+                logger.warning("   - Device is powered off")
+                logger.warning("   - MAC address is incorrect")
+            finally:
+                # Unsubscribe from advertisements
+                unsub()
 
-            if self.mac_address.upper() in [addr.upper() for addr in scan_results.keys()]:
-                logger.info(f"✓ Device found via ESPHome proxy")
-                return True
-            else:
-                logger.error(f"❌ Device {self.mac_address} not found via ESPHome proxy")
-                logger.error(f"   Found {len(scan_results)} device(s) total")
-                return False
+            return self.esphome_can_see_device
 
         except Exception as e:
-            logger.error(f"❌ Scan error: {e}")
+            logger.error(f"❌ Error checking ESPHome visibility: {e}")
             return False
 
     async def connect(self):
-        """Connect to the Casambi network via ESPHome proxy."""
+        """Connect to the Casambi network using direct BLE."""
         try:
             logger.info(f"🔵 CONNECT ATTEMPT #{self.connect_count + 1}")
 
@@ -172,31 +188,45 @@ class ESPHomeProxyMonitor:
             # Register disconnect callback
             self.casa.registerDisconnectCallback(self._disconnect_callback)
 
-            # Create ESPHome BLE device
-            ble_device = ESPHomeBluetoothDevice(
-                name="Casambi Device",
-                address=self.mac_address,
-                rssi=-50,
-                details={},
-            )
+            # Scan for device with Bleak
+            logger.info("Scanning for Casambi device...")
+            devices = await BleakScanner.discover(timeout=10.0, service_uuids=[CASA_UUID])
 
-            # Create ESPHome BLE client
-            ble_client = ESPHomeClient(
-                ble_device=ble_device,
-                client=self.api_client,
-            )
+            device = None
+            for d in devices:
+                if d.address.upper() == self.mac_address.upper():
+                    device = d
+                    break
 
-            logger.info("Connecting via ESPHome proxy...")
+            # Handle macOS UUID vs MAC
+            if not device and devices:
+                # Check if we have a UUID format device and the user provided MAC
+                if len(devices) == 1:
+                    device = devices[0]
+                    if len(device.address) == 36 and device.address.count('-') == 4:
+                        logger.info(f"Note: macOS returned UUID {device.address}, using MAC {self.mac_address} for API")
 
-            # Connect using the ESPHome client as the backend
-            # Note: We need to patch the connection to use ESPHomeClient
-            # The casambi-bt library uses bleak, which we need to override
+            if not device:
+                logger.error(f"❌ Device {self.mac_address} not found in local BLE scan")
+                logger.error(f"   Found {len(devices)} Casambi device(s)")
+                return False
 
-            # For now, connect with the BLEDevice and use api_address
+            logger.info(f"Found device: {device.name} ({device.address})")
+
+            # Determine if we need api_address parameter
+            api_address = None
+            if device.address.upper() != self.mac_address.upper():
+                # macOS returns UUID, use MAC for API
+                if len(device.address) == 36 and device.address.count('-') == 4:
+                    logger.info(f"Using MAC {self.mac_address} for API lookups")
+                    api_address = self.mac_address
+
+            # Connect
+            logger.info("Connecting to device...")
             await self.casa.connect(
-                ble_device,
+                device,
                 self.network_password,
-                api_address=self.mac_address
+                api_address=api_address
             )
 
             if self.casa.connected:
@@ -205,7 +235,8 @@ class ESPHomeProxyMonitor:
                     self.start_time = datetime.now()
                 logger.info(f"✅ CONNECTED (#{self.connect_count})")
                 logger.info(f"   Network: {self.casa.networkName}")
-                logger.info(f"   Protocol: {self.casa._casaNetwork._protocolVersion if hasattr(self.casa, '_casaNetwork') else 'Unknown'}")
+                if hasattr(self.casa, '_casaNetwork') and hasattr(self.casa._casaNetwork, '_protocolVersion'):
+                    logger.info(f"   Protocol: {self.casa._casaNetwork._protocolVersion}")
                 return True
             else:
                 logger.error("❌ Connection failed - casa.connected is False")
@@ -224,7 +255,10 @@ class ESPHomeProxyMonitor:
         try:
             # Disconnect cleanly first
             if self.casa and self.casa.connected:
-                await self.casa.disconnect()
+                try:
+                    await self.casa.disconnect()
+                except Exception as e:
+                    logger.debug(f"Disconnect error (ignoring): {e}")
                 await asyncio.sleep(2)
 
             # Try to reconnect
@@ -242,32 +276,17 @@ class ESPHomeProxyMonitor:
         except Exception as e:
             self.reconnect_failures += 1
             logger.error(f"❌ RECONNECT EXCEPTION: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     async def monitor(self, duration_seconds=None, check_interval=30):
         """Monitor the connection for a specified duration."""
         logger.info("=" * 60)
-        logger.info("ESPHome Proxy Connection Monitor")
-        logger.info("=" * 60)
-        logger.info(f"ESPHome host: {self.esphome_host}")
-        logger.info(f"Device MAC: {self.mac_address}")
-        logger.info(f"Check interval: {check_interval}s")
-        if duration_seconds:
-            logger.info(f"Duration: {duration_seconds}s ({duration_seconds/60:.1f} minutes)")
-        else:
-            logger.info("Duration: Indefinite (Ctrl+C to stop)")
+        logger.info("Starting connection monitor...")
         logger.info("=" * 60)
 
-        # Connect to ESPHome API
-        if not await self.connect_esphome_api():
-            logger.error("Failed to connect to ESPHome API. Exiting.")
-            return
-
-        # Scan for device
-        if not await self.scan_via_proxy():
-            logger.warning("Device not found in scan, but will try to connect anyway...")
-
-        # Initial connection
+        # Connect initially
         if not await self.connect():
             logger.error("Initial connection failed. Exiting.")
             return
@@ -290,57 +309,49 @@ class ESPHomeProxyMonitor:
 
                 next_check = now + check_interval
 
-                # Check connection status
-                if not self.casa or not self.casa.connected:
-                    logger.warning("⚠️  Connection lost - attempting reconnect...")
-                    await self.reconnect()
-                else:
-                    elapsed = time.time() - start
+                # Check if still connected
+                if self.casa.connected:
+                    elapsed = now - start
                     logger.info(f"✓ Still connected ({elapsed:.0f}s elapsed)")
 
+                    # Periodically re-check ESPHome visibility
+                    if int(elapsed) % 120 == 0:  # Every 2 minutes
+                        await self.check_esphome_visibility()
+                else:
+                    # Lost connection, try to reconnect
+                    logger.warning("Connection lost. Attempting reconnect...")
+                    await self.reconnect()
+
         except KeyboardInterrupt:
-            logger.info("\nMonitoring interrupted by user")
+            logger.info("\nStopping monitor...")
+            raise
+
         finally:
-            await self.cleanup()
+            # Print summary
             self.print_summary()
 
-    async def cleanup(self):
-        """Clean up resources."""
-        logger.info("Cleaning up...")
-
-        if self.casa and self.casa.connected:
-            try:
+            # Cleanup
+            if self.casa and self.casa.connected:
                 await self.casa.disconnect()
-            except Exception as e:
-                logger.warning(f"Error during disconnect: {e}")
-
-        if self.http_client:
-            try:
-                await self.http_client.aclose()
-            except Exception as e:
-                logger.warning(f"Error closing HTTP client: {e}")
-
-        if self.api_client:
-            try:
-                await self.api_client.disconnect()
-            except Exception as e:
-                logger.warning(f"Error disconnecting ESPHome API: {e}")
 
     def print_summary(self):
         """Print monitoring summary."""
-        duration = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        logger.info("=" * 60)
+        logger.info("MONITORING SUMMARY")
+        logger.info("=" * 60)
+        print(f"ESPHome proxy can see device: {'YES' if self.esphome_can_see_device else 'NO/UNKNOWN'}")
+        print(f"Total connection attempts: {self.connect_count}")
+        print(f"Total disconnects: {self.disconnect_count}")
+        print(f"Reconnect successes: {self.reconnect_success}")
+        print(f"Reconnect failures: {self.reconnect_failures}")
 
-        print("\n" + "=" * 60)
-        print("MONITORING SUMMARY")
-        print("=" * 60)
-        print(f"Total duration:        {duration:.1f}s ({duration/60:.1f} minutes)")
-        print(f"Connections:           {self.connect_count}")
-        print(f"Disconnections:        {self.disconnect_count}")
-        print(f"Reconnect successes:   {self.reconnect_success}")
-        print(f"Reconnect failures:    {self.reconnect_failures}")
-        if self.disconnect_count > 0 and duration > 0:
-            mtbf = duration / self.disconnect_count
-            print(f"Avg time between disconnects: {mtbf:.1f}s ({mtbf/60:.1f} minutes)")
+        if self.start_time:
+            total_time = (datetime.now() - self.start_time).total_seconds()
+            print(f"Total monitoring time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
+
+            if self.disconnect_count > 0:
+                mtbf = total_time / self.disconnect_count
+                print(f"Avg time between disconnects: {mtbf:.1f}s ({mtbf/60:.1f} minutes)")
         print("=" * 60)
 
 
@@ -348,25 +359,33 @@ async def main():
     """Main function."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Monitor Casambi BT connection via ESPHome Proxy")
-    parser.add_argument("--esphome-host", type=str, required=True, help="ESPHome device IP address or hostname")
-    parser.add_argument("--esphome-password", type=str, help="ESPHome API password (will prompt if not provided)")
-    parser.add_argument("--mac-address", type=str, required=True, help="Casambi device MAC address")
-    parser.add_argument("--network-password", type=str, help="Casambi network password (will prompt if not provided)")
-    parser.add_argument("--cache", type=str, default="/tmp/casambi_cache", help="Cache directory")
-    parser.add_argument("--duration", type=int, help="Monitoring duration in seconds")
-    parser.add_argument("--interval", type=int, default=30, help="Check interval in seconds (default: 30)")
+    parser = argparse.ArgumentParser(
+        description="Monitor Casambi BT connection and verify ESPHome Proxy visibility"
+    )
+    parser.add_argument("--esphome-host", type=str, required=True,
+                       help="ESPHome device IP address or hostname")
+    parser.add_argument("--esphome-password", type=str,
+                       help="ESPHome API password (will prompt if not provided)")
+    parser.add_argument("--mac-address", type=str, required=True,
+                       help="Casambi device MAC address")
+    parser.add_argument("--network-password", type=str,
+                       help="Casambi network password (will prompt if not provided)")
+    parser.add_argument("--duration", type=int,
+                       help="Monitoring duration in seconds (omit for indefinite)")
+    parser.add_argument("--interval", type=int, default=30,
+                       help="Check interval in seconds (default: 30)")
+    parser.add_argument("--cache", type=str, default="/tmp/casambi_cache",
+                       help="Cache directory for Casambi data")
 
     args = parser.parse_args()
 
-    # Get passwords
-    esphome_password = args.esphome_password
-    if not esphome_password:
-        esphome_password = getpass.getpass("Enter ESPHome API password: ")
+    # Get passwords if not provided
+    esphome_password = args.esphome_password or getpass.getpass("Enter ESPHome API password: ")
+    network_password = args.network_password or getpass.getpass("Enter Casambi network password: ")
 
-    network_password = args.network_password
-    if not network_password:
-        network_password = getpass.getpass("Enter Casambi network password: ")
+    # Ensure cache directory exists
+    cache_path = Path(args.cache)
+    cache_path.mkdir(parents=True, exist_ok=True)
 
     # Create monitor
     monitor = ESPHomeProxyMonitor(
@@ -374,10 +393,33 @@ async def main():
         esphome_password=esphome_password,
         mac_address=args.mac_address,
         network_password=network_password,
-        cache_path=Path(args.cache)
+        cache_path=str(cache_path)
     )
 
-    # Run monitoring
+    # Connect to ESPHome API
+    logger.info("=" * 60)
+    logger.info("ESPHome Proxy Monitor")
+    logger.info("=" * 60)
+    logger.info(f"ESPHome host: {args.esphome_host}")
+    logger.info(f"Device MAC: {args.mac_address}")
+    logger.info(f"Check interval: {args.interval}s")
+    logger.info(f"Duration: {'Indefinite (Ctrl+C to stop)' if not args.duration else f'{args.duration}s'}")
+    logger.info("=" * 60)
+
+    if not await monitor.connect_esphome_api():
+        logger.error("Failed to connect to ESPHome API. Exiting.")
+        return 1
+
+    # Check if ESPHome can see the device
+    await monitor.check_esphome_visibility()
+
+    if not monitor.esphome_can_see_device:
+        logger.warning("")
+        logger.warning("⚠️  ESPHome proxy cannot see the device!")
+        logger.warning("    Continuing with direct BLE connection for comparison...")
+        logger.warning("")
+
+    # Start monitoring
     await monitor.monitor(
         duration_seconds=args.duration,
         check_interval=args.interval
