@@ -164,6 +164,11 @@ async def main():
     # Configuration
     DEVICE_ADDRESS = None
 
+    # Helper function to detect if address is a UUID (macOS CoreBluetooth format)
+    def is_uuid(addr):
+        # UUID format: 8-4-4-4-12 hex digits
+        return len(addr) == 36 and addr.count('-') == 4
+
     # Optional: Auto-discover
     discover = input("Would you like to scan for Casambi devices first? (y/n): ").strip().lower()
     if discover == 'y':
@@ -171,16 +176,40 @@ async def main():
         if devices:
             print()
             if len(devices) == 1:
-                use_device = input(f"Use found device '{devices[0].name}' ({devices[0].address})? (y/n): ").strip().lower()
-                if use_device == 'y':
-                    DEVICE_ADDRESS = devices[0].address
+                device_addr = devices[0].address
+                device_name = devices[0].name
+
+                # Check if it's a UUID (macOS)
+                if is_uuid(device_addr):
+                    print(f"Found device '{device_name}' with UUID (macOS CoreBluetooth): {device_addr}")
+                    print("\nNote: On macOS, CoreBluetooth uses UUIDs instead of MAC addresses.")
+                    use_uuid = input("Use this UUID for connection? (y=use UUID, n=enter MAC manually): ").strip().lower()
+                    if use_uuid == 'y':
+                        DEVICE_ADDRESS = device_addr
+                    else:
+                        DEVICE_ADDRESS = input("Enter the actual MAC address (e.g., AA:BB:CC:DD:EE:FF): ").strip()
+                else:
+                    use_device = input(f"Use found device '{device_name}' ({device_addr})? (y/n): ").strip().lower()
+                    if use_device == 'y':
+                        DEVICE_ADDRESS = device_addr
             else:
                 print("\nSelect a device:")
                 for i, device in enumerate(devices, 1):
-                    print(f"  {i}. {device.name} ({device.address})")
+                    addr_type = " (UUID)" if is_uuid(device.address) else ""
+                    print(f"  {i}. {device.name} ({device.address}){addr_type}")
                 selection = input("\nEnter device number (or press Enter to type address manually): ").strip()
                 if selection.isdigit() and 1 <= int(selection) <= len(devices):
-                    DEVICE_ADDRESS = devices[int(selection) - 1].address
+                    selected_device = devices[int(selection) - 1]
+                    if is_uuid(selected_device.address):
+                        print(f"\nSelected UUID: {selected_device.address}")
+                        print("On macOS, you can use the UUID or enter the actual MAC address.")
+                        use_uuid = input("Use UUID? (y=use UUID, n=enter MAC manually): ").strip().lower()
+                        if use_uuid == 'y':
+                            DEVICE_ADDRESS = selected_device.address
+                        else:
+                            DEVICE_ADDRESS = input("Enter the actual MAC address: ").strip()
+                    else:
+                        DEVICE_ADDRESS = selected_device.address
 
     if not DEVICE_ADDRESS:
         print()
