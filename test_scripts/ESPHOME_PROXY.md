@@ -1,23 +1,32 @@
 # ESPHome Bluetooth Proxy Testing
 
-This guide explains how to test your Casambi connection through an ESPHome Bluetooth proxy device, replicating Home Assistant's connection behavior.
+This guide explains how to test your Casambi connection and verify your ESPHome Bluetooth proxy can see the device.
 
 ## Why This Matters
 
 The "Insufficient authorization (8)" error you're seeing in Home Assistant logs occurs **during reconnection** when using ESPHome Bluetooth proxy, not during the initial connection. This script helps debug that specific scenario by:
 
-1. Connecting through ESPHome proxy instead of direct BLE
-2. Monitoring for disconnects and reconnection attempts
+1. Verifying ESPHome proxy can see the device (checks proxy is working)
+2. Monitoring connection stability with direct BLE (same as HA does internally)
 3. Checking if ESPHome has proper pairing support enabled
 4. Logging detailed connection events
+
+## How It Works
+
+The script uses the same approach as Home Assistant:
+- Uses `aioesphomeapi` to verify ESPHome proxy receives Bluetooth advertisements from your device
+- Uses direct Bleak connection for monitoring (Home Assistant does the same after getting device info)
+- This approach lets us verify the proxy setup while monitoring real connection behavior
 
 ## Prerequisites
 
 ### 1. Install Dependencies
 
 ```bash
-pip install aioesphomeapi bleak-esphome
+pip install aioesphomeapi bleak
 ```
+
+Note: You don't need `bleak-esphome` - that library is tightly integrated with Home Assistant and difficult to use standalone.
 
 ### 2. Find Your ESPHome Device Info
 

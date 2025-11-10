@@ -143,8 +143,10 @@ If `cache_services: yes`, you may see "Insufficient authorization (8)" errors on
 
 **Installation:**
 ```bash
-pip install aioesphomeapi bleak-esphome
+pip install aioesphomeapi
 ```
+
+Note: You don't need `bleak-esphome` - the script uses direct Bleak connections (same approach as HA).
 
 ### Test 4: Protocol Debug (Low-Level)
 

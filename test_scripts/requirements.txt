@@ -6,9 +6,12 @@ bleak>=0.21.0
 # HTTP client library (required by casambi-bt)
 httpx>=0.24.0
 
-# ESPHome Bluetooth proxy support (for monitor_esphome_proxy.py)
+# ESPHome API client (for monitor_esphome_proxy.py)
+# Used to verify ESPHome proxy can see the device
 aioesphomeapi>=21.0.0
-bleak-esphome>=1.0.0
+
+# Note: bleak-esphome is NOT needed - it's too tightly integrated with Home Assistant
+# The monitor script uses direct Bleak connections instead (same as HA does internally)
 
 # The casambi-bt library should be installed with:
 # pip install -e /path/to/your/casambi-bt
