@@ -23,6 +23,13 @@ except ImportError:
 try:
     from CasambiBt import Casambi, errors
     from CasambiBt._constants import CASA_UUID
+    from CasambiBt.errors import (
+        NetworkNotFoundError,
+        NetworkOnlineUpdateNeededError,
+        AuthenticationError,
+        UnsupportedProtocolVersion,
+        ProtocolError,
+    )
 except ImportError:
     print("ERROR: CasambiBt not found. Make sure you've installed casambi-bt:")
     print("  cd /path/to/casambi-bt")
@@ -55,7 +62,7 @@ async def discover_casambi_devices(timeout=10):
     return devices
 
 
-async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache')):
+async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache'), use_offline=False):
     """Test connection to a Casambi network."""
     logger.info("="*60)
     logger.info(f"Testing connection to {address}")
@@ -67,6 +74,7 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
     try:
         # Create HTTP client and Casambi instance
         logger.info("Creating Casambi instance...")
+        logger.info(f"Using cache directory: {cache_path}")
         http_client = AsyncClient()
         casa = Casambi(http_client, cache_path)
 
@@ -115,17 +123,19 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
         if address.upper() != device.address.upper():
             logger.info(f"Note: Connected using '{device.address}' for requested '{address}'")
 
-        # Note: We DON'T clear cache here because:
-        # 1. On macOS, the UUID can't be looked up in Casambi's cloud API
-        # 2. Using cached data or offline mode is necessary
-        # Uncomment the line below to force a fresh connection:
-        # await casa.invalidateCache(address)
+        # Note: We DON'T clear cache here to avoid issues with UUID lookups
+        # If you want to force a fresh connection, uncomment:
+        # await casa.invalidateCache(device.address)
 
-        # Attempt connection in offline mode (bypasses cloud API)
-        # This is necessary on macOS where CoreBluetooth uses UUIDs not recognized by Casambi API
-        logger.info("Attempting connection (offline mode)...")
-        logger.info("Note: Using forceOffline=True to skip Casambi cloud API")
-        await casa.connect(device, password, forceOffline=True)
+        # Attempt connection
+        if use_offline:
+            logger.info("Attempting connection in OFFLINE mode (using cached data)...")
+            logger.info("Note: This requires cached network data from a previous connection")
+            await casa.connect(device, password, forceOffline=True)
+        else:
+            logger.info("Attempting connection (with cloud API lookup)...")
+            logger.info("Note: This will fetch network info from Casambi cloud API")
+            await casa.connect(device, password)
 
         # Check connection status
         if casa.connected:
@@ -150,6 +160,26 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
             logger.error("✗ Connection failed - casa.connected is False")
             return False
 
+    except errors.NetworkNotFoundError as e:
+        logger.error(f"✗ NETWORK NOT FOUND: {e}")
+        logger.error("")
+        logger.error("This usually means the cloud API couldn't find your network.")
+        logger.error("On macOS, CoreBluetooth uses random UUIDs that aren't recognized by Casambi API.")
+        logger.error("")
+        logger.error("SOLUTION: Use your Home Assistant cache directory which has the network data:")
+        logger.error("  Run with: --ha-cache option or")
+        logger.error("  Manually specify: --cache ~/.homeassistant/.storage/casambi_bt")
+        return False
+    except errors.NetworkOnlineUpdateNeededError as e:
+        logger.error(f"✗ OFFLINE MODE ERROR: {e}")
+        logger.error("")
+        logger.error("Network data is not cached yet.")
+        logger.error("Offline mode requires cached network data from a previous connection.")
+        logger.error("")
+        logger.error("SOLUTION: Don't use --offline flag on first connection,")
+        logger.error("or use your Home Assistant cache directory which has the network data:")
+        logger.error("  Run with: --ha-cache option")
+        return False
     except errors.UnsupportedProtocolVersion as e:
         logger.error(f"✗ UNSUPPORTED PROTOCOL VERSION: {e}")
         return False
@@ -186,12 +216,50 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
 
 async def main():
     """Main test function."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Casambi BT connection with network level 11 support")
+    parser.add_argument("--cache", type=str, help="Cache directory path (default: /tmp/casambi_cache)")
+    parser.add_argument("--ha-cache", action="store_true", help="Use Home Assistant cache directory")
+    parser.add_argument("--offline", action="store_true", help="Use offline mode (requires cached data)")
+    parser.add_argument("--address", type=str, help="Device MAC address or UUID")
+    parser.add_argument("--no-scan", action="store_true", help="Skip device scanning")
+
+    args = parser.parse_args()
+
     print("\n" + "="*60)
     print("Casambi BT Network Level 11 Connection Test")
     print("="*60 + "\n")
 
+    # Determine cache directory
+    if args.ha_cache:
+        # Try to find Home Assistant config directory
+        ha_config_paths = [
+            Path.home() / ".homeassistant",
+            Path("/config"),  # Docker/HAOS
+        ]
+        cache_path = None
+        for ha_path in ha_config_paths:
+            potential_cache = ha_path / ".storage" / "casambi_bt"
+            if ha_path.exists():
+                cache_path = potential_cache
+                print(f"Using Home Assistant cache: {cache_path}")
+                break
+        if not cache_path:
+            print("WARNING: Could not find Home Assistant config directory")
+            print("Using default cache path instead")
+            cache_path = Path("/tmp/casambi_cache")
+    elif args.cache:
+        cache_path = Path(args.cache)
+        print(f"Using custom cache: {cache_path}")
+    else:
+        cache_path = Path("/tmp/casambi_cache")
+        print(f"Using default cache: {cache_path}")
+
+    print()
+
     # Configuration
-    DEVICE_ADDRESS = None
+    DEVICE_ADDRESS = args.address
 
     # Helper function to detect if address is a UUID (macOS CoreBluetooth format)
     def is_uuid(addr):
@@ -199,7 +267,11 @@ async def main():
         return len(addr) == 36 and addr.count('-') == 4
 
     # Optional: Auto-discover
-    discover = input("Would you like to scan for Casambi devices first? (y/n): ").strip().lower()
+    if not args.no_scan and not DEVICE_ADDRESS:
+        discover = input("Would you like to scan for Casambi devices first? (y/n): ").strip().lower()
+    else:
+        discover = 'n'
+
     if discover == 'y':
         devices = await discover_casambi_devices()
         if devices:
@@ -251,10 +323,15 @@ async def main():
         return
 
     print("\nStarting connection test...")
-    print(f"Logs are being saved to: casambi_test.log\n")
+    print(f"Logs are being saved to: casambi_test.log")
+    if args.offline:
+        print("Mode: OFFLINE (using cached data)")
+    else:
+        print("Mode: ONLINE (cloud API lookup)")
+    print()
 
     # Run the test
-    success = await test_connection(DEVICE_ADDRESS, NETWORK_PASSWORD)
+    success = await test_connection(DEVICE_ADDRESS, NETWORK_PASSWORD, cache_path, args.offline)
 
     print("\n" + "="*60)
     if success:
