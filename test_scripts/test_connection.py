@@ -142,15 +142,30 @@ async def main():
     print("="*60 + "\n")
 
     # Configuration
+    DEVICE_ADDRESS = None
+
     # Optional: Auto-discover
     discover = input("Would you like to scan for Casambi devices first? (y/n): ").strip().lower()
     if discover == 'y':
         devices = await discover_casambi_devices()
         if devices:
-            print("\nDevices found above. You can use one of these addresses.")
+            print()
+            if len(devices) == 1:
+                use_device = input(f"Use found device '{devices[0].name}' ({devices[0].address})? (y/n): ").strip().lower()
+                if use_device == 'y':
+                    DEVICE_ADDRESS = devices[0].address
+            else:
+                print("\nSelect a device:")
+                for i, device in enumerate(devices, 1):
+                    print(f"  {i}. {device.name} ({device.address})")
+                selection = input("\nEnter device number (or press Enter to type address manually): ").strip()
+                if selection.isdigit() and 1 <= int(selection) <= len(devices):
+                    DEVICE_ADDRESS = devices[int(selection) - 1].address
 
-    print()
-    DEVICE_ADDRESS = input("Enter your Casambi device MAC address (e.g., AA:BB:CC:DD:EE:FF): ").strip()
+    if not DEVICE_ADDRESS:
+        print()
+        DEVICE_ADDRESS = input("Enter your Casambi device MAC address (e.g., AA:BB:CC:DD:EE:FF): ").strip()
+
     NETWORK_PASSWORD = getpass.getpass("Enter your network password (hidden): ")
 
     if not DEVICE_ADDRESS or not NETWORK_PASSWORD:
