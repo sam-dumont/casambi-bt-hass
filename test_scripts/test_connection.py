@@ -90,9 +90,10 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
         logger.info("Clearing cache for fresh connection test...")
         await casa.invalidateCache(address)
 
-        # Attempt connection
-        logger.info("Attempting connection...")
-        await casa.connect(device, password)
+        # Attempt connection (try offline mode first to avoid cloud API dependency)
+        logger.info("Attempting connection (offline mode)...")
+        logger.info("Note: Using forceOffline=True to skip Casambi cloud API")
+        await casa.connect(device, password, forceOffline=True)
 
         # Check connection status
         if casa.connected:
