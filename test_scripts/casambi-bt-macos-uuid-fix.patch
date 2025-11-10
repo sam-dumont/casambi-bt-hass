@@ -1,0 +1,48 @@
+diff --git a/setup.cfg b/setup.cfg
+index 6b9ce89..32bdac7 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -23,7 +23,7 @@ install_requires =
+     cryptography>=40.0.0
+     httpx>=0.25
+     bleak_retry_connector >= 3.6.0
+-    aiopath==0.7.*
++    aiopath>=0.6.11,<0.7
+
+ [options.packages.find]
+ where = src
+diff --git a/src/CasambiBt/_casambi.py b/src/CasambiBt/_casambi.py
+index 3fdd665..7323c63 100644
+--- a/src/CasambiBt/_casambi.py
++++ b/src/CasambiBt/_casambi.py
+@@ -102,12 +102,14 @@ class Casambi:
+         addr_or_device: str | BLEDevice,
+         password: str,
+         forceOffline: bool = False,
++        api_address: str | None = None,
+     ) -> None:
+         """Connect and authenticate to a network.
+
+         :param addr: The MAC address of the network or a BLEDevice. Use `discover` to find the address of a network.
+         :param password: The password for the network.
+         :param forceOffline: Whether to avoid contacting the casambi servers.
++        :param api_address: Optional MAC address to use for API lookups. Useful on macOS where BLEDevice.address is a UUID.
+         :raises AuthenticationError: The supplied password is invalid.
+         :raises ProtocolError: The network did not follow the expected protocol.
+         :raises NetworkNotFoundError: No network was found under the supplied address.
+@@ -128,8 +130,14 @@ class Casambi:
+         if not self._httpClient:
+             self._httpClient = AsyncClient()
+
++        # Use api_address for API lookups if provided, otherwise use addr
++        # This is useful on macOS where BLEDevice.address is a UUID, not a MAC address
++        api_addr = api_address if api_address else addr
++        if api_address:
++            self._logger.info(f"Using API address {api_address} for cloud lookups (BLE address: {addr})")
++
+         # Retrieve network information
+-        uuid = addr.replace(":", "").lower()
++        uuid = api_addr.replace(":", "").lower()
+         await self._cache.setUuid(uuid)
+         self._casaNetwork = Network(uuid, self._httpClient, self._cache)
+         await self._casaNetwork.load()
