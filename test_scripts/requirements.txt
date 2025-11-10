@@ -6,6 +6,10 @@ bleak>=0.21.0
 # HTTP client library (required by casambi-bt)
 httpx>=0.24.0
 
+# ESPHome Bluetooth proxy support (for monitor_esphome_proxy.py)
+aioesphomeapi>=21.0.0
+bleak-esphome>=1.0.0
+
 # The casambi-bt library should be installed with:
 # pip install -e /path/to/your/casambi-bt
 # (DO NOT install from PyPI - that has the old version)

@@ -6,7 +6,9 @@ This directory contains test scripts to validate the network level 11 fix for Ca
 
 The scripts help you:
 1. **test_connection.py** - Test basic connection with the patched library
-2. **debug_protocol.py** - Capture detailed protocol packets for analysis
+2. **monitor_connection.py** - Monitor connection stability over time
+3. **monitor_esphome_proxy.py** - Monitor connection via ESPHome Bluetooth proxy (Home Assistant setup)
+4. **debug_protocol.py** - Capture detailed protocol packets for analysis
 
 ## Prerequisites
 
@@ -82,7 +84,69 @@ python3 test_connection.py
 
 ❌ **FAILURE** - If it fails, you'll see error details and next steps.
 
-### Test 2: Protocol Debug (Low-Level)
+### Test 2: Connection Stability Monitor
+
+This script monitors your connection over time to track disconnections:
+
+```bash
+cd ~/casambi-bt-hass/test_scripts
+./monitor_connection.py --address YOUR_MAC --password YOUR_PASSWORD --duration 3600
+```
+
+**What it does:**
+- Maintains a connection for the specified duration
+- Tracks connection/disconnection events
+- Attempts automatic reconnection
+- Reports statistics on stability
+- Saves logs to `casambi_monitor.log`
+
+**Options:**
+- `--duration SECONDS` - How long to monitor (omit for indefinite)
+- `--interval SECONDS` - Check interval (default: 10s)
+- `--cache PATH` - Cache directory
+
+### Test 3: ESPHome Bluetooth Proxy Monitor
+
+This script tests connection via ESPHome Bluetooth proxy, mimicking Home Assistant's setup:
+
+```bash
+cd ~/casambi-bt-hass/test_scripts
+./monitor_esphome_proxy.py \
+  --esphome-host 192.168.1.100 \
+  --mac-address YOUR_MAC \
+  --duration 3600
+```
+
+**What it does:**
+- Connects to your ESPHome device's Bluetooth proxy
+- Verifies pairing support is enabled
+- Scans for Casambi device via proxy
+- Monitors connection stability through the proxy
+- Reports disconnect/reconnect events
+- Saves logs to `casambi_esphome_monitor.log`
+
+**Required:**
+- ESPHome device with Bluetooth proxy enabled
+- ESPHome API password (will prompt if not provided)
+- Casambi network password (will prompt if not provided)
+
+**ESPHome Configuration Check:**
+
+To ensure proper pairing support, your ESPHome config should have:
+```yaml
+bluetooth_proxy:
+  active: true
+  cache_services: no  # Important for pairing support
+```
+
+If `cache_services: yes`, you may see "Insufficient authorization (8)" errors on reconnection.
+
+**Installation:**
+```bash
+pip install aioesphomeapi bleak-esphome
+```
+
+### Test 4: Protocol Debug (Low-Level)
 
 This script captures raw Bluetooth packets to analyze protocol changes:
 
