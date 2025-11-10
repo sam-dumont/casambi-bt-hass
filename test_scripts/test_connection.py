@@ -75,16 +75,45 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
         device = None
         devices = await BleakScanner.discover(timeout=10, service_uuids=[CASA_UUID])
 
+        # Try exact match first
         for d in devices:
             if d.address.upper() == address.upper():
                 device = d
                 break
 
+        # If no exact match and we found devices, handle MAC vs UUID mismatch
+        if not device and devices:
+            logger.info(f"No exact match for '{address}' in scan results")
+            logger.info(f"Found {len(devices)} Casambi device(s) total:")
+            for d in devices:
+                logger.info(f"  - {d.name} ({d.address})")
+
+            # On macOS, BLE scanner returns UUIDs, not MAC addresses
+            # If user entered a MAC but we found exactly one Casambi device, use it
+            if len(devices) == 1:
+                logger.info("Note: On macOS, CoreBluetooth uses UUIDs instead of MAC addresses")
+                logger.info(f"Using the discovered device: {devices[0].name} ({devices[0].address})")
+                device = devices[0]
+            else:
+                logger.error(f"Multiple devices found. Please run the script with device discovery")
+                logger.error("to select the correct device, or use one of the discovered UUIDs:")
+                for d in devices:
+                    logger.error(f"  - {d.address}")
+                return False
+
         if not device:
             logger.error(f"Device {address} not found!")
+            logger.error("Make sure:")
+            logger.error("  1. The device is powered on and in range")
+            logger.error("  2. Bluetooth is enabled on your system")
+            logger.error("  3. Try scanning first (answer 'y' to discovery prompt)")
             return False
 
         logger.info(f"Found device: {device.name} ({device.address})")
+
+        # If user entered a different address than what we're using, note it
+        if address.upper() != device.address.upper():
+            logger.info(f"Note: Connected using '{device.address}' for requested '{address}'")
 
         # Note: We DON'T clear cache here because:
         # 1. On macOS, the UUID can't be looked up in Casambi's cloud API
