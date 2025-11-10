@@ -86,11 +86,14 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
 
         logger.info(f"Found device: {device.name} ({device.address})")
 
-        # Clear cache for fresh connection
-        logger.info("Clearing cache for fresh connection test...")
-        await casa.invalidateCache(address)
+        # Note: We DON'T clear cache here because:
+        # 1. On macOS, the UUID can't be looked up in Casambi's cloud API
+        # 2. Using cached data or offline mode is necessary
+        # Uncomment the line below to force a fresh connection:
+        # await casa.invalidateCache(address)
 
-        # Attempt connection (try offline mode first to avoid cloud API dependency)
+        # Attempt connection in offline mode (bypasses cloud API)
+        # This is necessary on macOS where CoreBluetooth uses UUIDs not recognized by Casambi API
         logger.info("Attempting connection (offline mode)...")
         logger.info("Note: Using forceOffline=True to skip Casambi cloud API")
         await casa.connect(device, password, forceOffline=True)
