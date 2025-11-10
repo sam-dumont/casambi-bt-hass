@@ -165,7 +165,7 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
             if casa.units:
                 logger.info("\nUnits found:")
                 for unit in casa.units:
-                    logger.info(f"  - {unit.name} (ID: {unit.id})")
+                    logger.info(f"  - {unit.name} (ID: {unit.deviceId})")
 
             return True
         else:
