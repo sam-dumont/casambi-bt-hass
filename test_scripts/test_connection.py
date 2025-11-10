@@ -119,9 +119,14 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
 
         logger.info(f"Found device: {device.name} ({device.address})")
 
-        # If user entered a different address than what we're using, note it
+        # Determine if we need to use api_address parameter
+        api_address = None
         if address.upper() != device.address.upper():
-            logger.info(f"Note: Connected using '{device.address}' for requested '{address}'")
+            logger.info(f"Note: BLE device address '{device.address}' differs from requested '{address}'")
+            # On macOS, device.address is a UUID, so use the original MAC for API lookups
+            if len(device.address) == 36 and device.address.count('-') == 4:
+                logger.info(f"Detected UUID format - will use MAC '{address}' for API lookups")
+                api_address = address
 
         # Note: We DON'T clear cache here to avoid issues with UUID lookups
         # If you want to force a fresh connection, uncomment:
@@ -131,11 +136,13 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
         if use_offline:
             logger.info("Attempting connection in OFFLINE mode (using cached data)...")
             logger.info("Note: This requires cached network data from a previous connection")
-            await casa.connect(device, password, forceOffline=True)
+            await casa.connect(device, password, forceOffline=True, api_address=api_address)
         else:
             logger.info("Attempting connection (with cloud API lookup)...")
             logger.info("Note: This will fetch network info from Casambi cloud API")
-            await casa.connect(device, password)
+            if api_address:
+                logger.info(f"Using API address: {api_address}, BLE address: {device.address}")
+            await casa.connect(device, password, api_address=api_address)
 
         # Check connection status
         if casa.connected:
