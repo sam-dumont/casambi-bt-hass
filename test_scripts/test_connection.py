@@ -149,7 +149,12 @@ async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache
             logger.info("✓ CONNECTION SUCCESSFUL!")
             logger.info(f"  Network Name: {casa.networkName}")
             logger.info(f"  Network ID: {casa.networkId}")
-            logger.info(f"  Protocol Version: {casa.protocolVersion}")
+
+            # Try to get protocol version from internal network object
+            if hasattr(casa, '_casaNetwork') and hasattr(casa._casaNetwork, '_protocolVersion'):
+                logger.info(f"  Protocol Version: {casa._casaNetwork._protocolVersion}")
+            else:
+                logger.info("  Protocol Version: Unknown (not exposed by library)")
 
             # Get network info
             logger.info("\nNetwork Information:")
