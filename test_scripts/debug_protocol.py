@@ -8,6 +8,7 @@ import asyncio
 import logging
 import sys
 import struct
+import getpass
 from datetime import datetime
 from pathlib import Path
 
@@ -259,7 +260,7 @@ async def main():
 
     # Configuration
     DEVICE_ADDRESS = input("Enter your Casambi device MAC address: ").strip()
-    NETWORK_PASSWORD = input("Enter your network password: ").strip()
+    NETWORK_PASSWORD = getpass.getpass("Enter your network password (hidden): ")
 
     if not DEVICE_ADDRESS or not NETWORK_PASSWORD:
         print("ERROR: Both address and password are required!")

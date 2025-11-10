@@ -7,6 +7,7 @@ This script attempts to connect to your Casambi network and reports the status.
 import asyncio
 import logging
 import sys
+import getpass
 from bleak import BleakScanner, BleakClient
 
 # Add your casambi-bt path if installed with pip install -e
@@ -37,15 +38,14 @@ logger = logging.getLogger(__name__)
 async def discover_casambi_devices(timeout=10):
     """Scan for Casambi devices."""
     logger.info(f"Scanning for Casambi devices (timeout: {timeout}s)...")
+    # When service_uuids is specified, BleakScanner already filters for us
     devices = await BleakScanner.discover(timeout=timeout, service_uuids=[CASA_UUID])
 
-    casambi_devices = [d for d in devices if CASA_UUID.lower() in [s.lower() for s in d.metadata.get('uuids', [])]]
-
-    logger.info(f"Found {len(casambi_devices)} Casambi device(s):")
-    for device in casambi_devices:
+    logger.info(f"Found {len(devices)} Casambi device(s):")
+    for device in devices:
         logger.info(f"  - {device.name} ({device.address})")
 
-    return casambi_devices
+    return devices
 
 
 async def test_connection(address, password, cache_dir='/tmp/casambi_cache'):
@@ -141,20 +141,21 @@ async def main():
     print("Casambi BT Network Level 11 Connection Test")
     print("="*60 + "\n")
 
-    # Configuration - MODIFY THESE VALUES
+    # Configuration
+    # Optional: Auto-discover
+    discover = input("Would you like to scan for Casambi devices first? (y/n): ").strip().lower()
+    if discover == 'y':
+        devices = await discover_casambi_devices()
+        if devices:
+            print("\nDevices found above. You can use one of these addresses.")
+
+    print()
     DEVICE_ADDRESS = input("Enter your Casambi device MAC address (e.g., AA:BB:CC:DD:EE:FF): ").strip()
-    NETWORK_PASSWORD = input("Enter your network password: ").strip()
+    NETWORK_PASSWORD = getpass.getpass("Enter your network password (hidden): ")
 
     if not DEVICE_ADDRESS or not NETWORK_PASSWORD:
         print("ERROR: Both address and password are required!")
         return
-
-    # Optional: Auto-discover
-    discover = input("\nWould you like to scan for Casambi devices first? (y/n): ").strip().lower()
-    if discover == 'y':
-        devices = await discover_casambi_devices()
-        if devices and not DEVICE_ADDRESS:
-            print("\nDevices found. You can use one of these addresses above.")
 
     print("\nStarting connection test...")
     print(f"Logs are being saved to: casambi_test.log\n")
