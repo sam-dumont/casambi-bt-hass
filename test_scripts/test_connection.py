@@ -8,10 +8,17 @@ import asyncio
 import logging
 import sys
 import getpass
+from pathlib import Path
 from bleak import BleakScanner, BleakClient
 
 # Add your casambi-bt path if installed with pip install -e
 # sys.path.insert(0, '/path/to/casambi-bt/src')
+
+try:
+    from httpx import AsyncClient
+except ImportError:
+    print("ERROR: httpx not installed. Install with: pip install httpx")
+    sys.exit(1)
 
 try:
     from CasambiBt import Casambi, errors
@@ -48,18 +55,20 @@ async def discover_casambi_devices(timeout=10):
     return devices
 
 
-async def test_connection(address, password, cache_dir='/tmp/casambi_cache'):
+async def test_connection(address, password, cache_path=Path('/tmp/casambi_cache')):
     """Test connection to a Casambi network."""
     logger.info("="*60)
     logger.info(f"Testing connection to {address}")
     logger.info("="*60)
 
     casa = None
+    http_client = None
 
     try:
-        # Create Casambi instance
+        # Create HTTP client and Casambi instance
         logger.info("Creating Casambi instance...")
-        casa = Casambi(cache_dir=cache_dir)
+        http_client = AsyncClient()
+        casa = Casambi(http_client, cache_path)
 
         # Scan for the device
         logger.info(f"Looking for device {address}...")
@@ -133,6 +142,13 @@ async def test_connection(address, password, cache_dir='/tmp/casambi_cache'):
                 logger.info("Disconnected successfully")
             except Exception as e:
                 logger.warning(f"Error during disconnect: {e}")
+
+        # Close HTTP client
+        if http_client:
+            try:
+                await http_client.aclose()
+            except Exception as e:
+                logger.warning(f"Error closing HTTP client: {e}")
 
 
 async def main():
