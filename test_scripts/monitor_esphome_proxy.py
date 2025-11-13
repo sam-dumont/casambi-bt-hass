@@ -362,8 +362,8 @@ async def main():
     parser = argparse.ArgumentParser(
         description="Monitor Casambi BT connection and verify ESPHome Proxy visibility"
     )
-    parser.add_argument("--esphome-host", type=str, required=True,
-                       help="ESPHome device IP address or hostname")
+    parser.add_argument("--esphome-host", type=str,
+                       help="ESPHome device IP address or hostname (optional - for proxy visibility check)")
     parser.add_argument("--esphome-password", type=str,
                        help="ESPHome API password (will prompt if not provided)")
     parser.add_argument("--mac-address", type=str, required=True,
@@ -380,7 +380,9 @@ async def main():
     args = parser.parse_args()
 
     # Get passwords if not provided
-    esphome_password = args.esphome_password or getpass.getpass("Enter ESPHome API password: ")
+    esphome_password = None
+    if args.esphome_host:
+        esphome_password = args.esphome_password or getpass.getpass("Enter ESPHome API password: ")
     network_password = args.network_password or getpass.getpass("Enter Casambi network password: ")
 
     # Ensure cache directory exists
@@ -396,28 +398,40 @@ async def main():
         cache_path=str(cache_path)
     )
 
-    # Connect to ESPHome API
+    # Connect to ESPHome API (optional)
     logger.info("=" * 60)
-    logger.info("ESPHome Proxy Monitor")
+    logger.info("Casambi Connection Monitor")
     logger.info("=" * 60)
-    logger.info(f"ESPHome host: {args.esphome_host}")
+    logger.info(f"ESPHome host: {args.esphome_host if args.esphome_host else 'Not configured (skipping proxy check)'}")
     logger.info(f"Device MAC: {args.mac_address}")
     logger.info(f"Check interval: {args.interval}s")
     logger.info(f"Duration: {'Indefinite (Ctrl+C to stop)' if not args.duration else f'{args.duration}s'}")
     logger.info("=" * 60)
 
-    if not await monitor.connect_esphome_api():
-        logger.error("Failed to connect to ESPHome API. Exiting.")
-        return 1
+    if args.esphome_host:
+        logger.info("Attempting ESPHome API connection for proxy visibility check...")
+        if await monitor.connect_esphome_api():
+            # Check if ESPHome can see the device
+            await monitor.check_esphome_visibility()
 
-    # Check if ESPHome can see the device
-    await monitor.check_esphome_visibility()
-
-    if not monitor.esphome_can_see_device:
-        logger.warning("")
-        logger.warning("⚠️  ESPHome proxy cannot see the device!")
-        logger.warning("    Continuing with direct BLE connection for comparison...")
-        logger.warning("")
+            if not monitor.esphome_can_see_device:
+                logger.warning("")
+                logger.warning("⚠️  ESPHome proxy cannot see the device!")
+                logger.warning("    Continuing with direct BLE connection...")
+                logger.warning("")
+        else:
+            logger.warning("⚠️  Failed to connect to ESPHome API")
+            logger.warning("   This could be:")
+            logger.warning("   - Firewall blocking port 6053")
+            logger.warning("   - ESPHome API not enabled in device config")
+            logger.warning("   - Network isolation (different VLAN/subnet)")
+            logger.warning("")
+            logger.warning("   Continuing with direct BLE connection monitoring...")
+            logger.warning("")
+    else:
+        logger.info("ESPHome proxy check skipped (no --esphome-host provided)")
+        logger.info("Monitoring direct BLE connection only...")
+        logger.info("")
 
     # Start monitoring
     await monitor.monitor(
